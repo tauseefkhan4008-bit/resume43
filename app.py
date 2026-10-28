@@ -6,6 +6,7 @@ import hashlib
 import io
 import os
 import re
+import time
 from typing import List, Optional
 
 import streamlit as st
@@ -31,6 +32,10 @@ FALLBACK_MODELS = [
 CUSTOM_OPTION = "Custom..."
 _EXCLUDED_MODEL_WORDS = ("image", "tts", "live", "audio", "native", "embedding", "robotics", "omni", "imagen", "veo")
 MAX_FALLBACK_TRIES = 3
+RETRIES_PER_MODEL = 2          # attempts per model when Gemini is overloaded (5xx)
+RETRY_DELAY_SECONDS = 2
+SERVER_ERROR_CODES = (500, 502, 503, 504)
+SWITCH_MODEL_CODES = (404, 429) + SERVER_ERROR_CODES  # errors where trying another model can help
 MAX_FILE_MB = 5
 MAX_RESUME_CHARS = 30_000
 MAX_JD_CHARS = 10_000
@@ -199,7 +204,7 @@ def friendly_api_error(exc: Exception) -> str:
         if code == 429:
             return "Gemini rate limit / quota reached. Wait a minute and try again, or use another model."
         if code in (500, 502, 503, 504):
-            return "Gemini is temporarily unavailable or overloaded. Please try again shortly."
+            return "Gemini is overloaded right now (all tried models were busy). Wait a minute and try again, or pick another model in the sidebar."
         return f"Gemini API error ({code}): {getattr(exc, 'message', exc)}"
     return f"Something went wrong while analysing the resume: {exc}"
 
@@ -260,15 +265,26 @@ def list_flash_models(api_key: str) -> List[str]:
 
 
 def analyze_with_fallback(api_key: str, models: List[str], resume_text: str, job_description: str):
-    """Try each model in turn; move on only if a model is missing/retired (HTTP 404)."""
+    """Try models in turn.
+
+    - Overloaded / server error (5xx): retry the same model briefly, then move on.
+    - Model missing (404) or quota hit (429): move on to the next model straight away.
+    - Anything else (e.g. invalid API key): stop and report it.
+    """
     last_exc: Optional[Exception] = None
     for model in models[: MAX_FALLBACK_TRIES + 1]:
-        try:
-            return analyze_resume(api_key, model, resume_text, job_description), model
-        except genai_errors.APIError as exc:
-            if getattr(exc, "code", None) != 404:
-                raise
-            last_exc = exc
+        for attempt in range(RETRIES_PER_MODEL):
+            try:
+                return analyze_resume(api_key, model, resume_text, job_description), model
+            except genai_errors.APIError as exc:
+                code = getattr(exc, "code", None)
+                if code not in SWITCH_MODEL_CODES:
+                    raise
+                last_exc = exc
+                if code in SERVER_ERROR_CODES and attempt < RETRIES_PER_MODEL - 1:
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+                break  # give up on this model, try the next one
     raise last_exc if last_exc else ValueError("No model available.")
 
 
@@ -531,7 +547,7 @@ def main() -> None:
                     result, used = analyze_with_fallback(api_key, candidates, resume_text, job_description)
                     cache[cache_key] = result.model_dump()
                     if used != model:
-                        st.info(f"`{model}` isn't available, so `{used}` was used instead.")
+                        st.info(f"`{model}` wasn't available (retired or overloaded), so `{used}` was used instead.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(friendly_api_error(exc))
                     st.stop()
