@@ -125,7 +125,7 @@ To update the live app, just `git push` to the same branch; it redeploys automat
 
 ## Choosing a model
 
-Google retires Gemini models regularly (for example, `gemini-2.5-flash` now returns a 404 "model no longer available" error). To avoid this, the app asks the Gemini API which Flash models your key can use and lists them in the sidebar, newest first. If the selected model turns out to be retired, the app automatically tries the next available one and tells you which it used.
+Google retires Gemini models regularly (for example, `gemini-2.5-flash` now returns a 404 "model no longer available" error). To avoid this, the app asks the Gemini API which Flash models your key can use and lists them in the sidebar, newest first. If the selected model is retired or overloaded (HTTP 404/429/5xx), the app retries briefly and then automatically tries the next available model, telling you which one it used.
 
 You can also choose **Custom...** and type any model code. Current names are listed at <https://ai.google.dev/gemini-api/docs/models>. If the live list can't be fetched, the app falls back to the `FALLBACK_MODELS` list at the top of `app.py`; update it there if Google releases newer models.
 
@@ -136,6 +136,7 @@ You can also choose **Custom...** and type any model code. Current names are lis
 | "Very little text could be extracted" | Your PDF is probably a scan or image-based. Export a text-based PDF/DOCX from Word or Google Docs. (An ATS can't read it either.) |
 | "API key rejected" | Check the key, and make sure the Gemini API is enabled for your Google project. |
 | "Model not found" | The model is retired or the name is wrong. Pick another one from the sidebar list. If the list is empty, check your API key. |
+| "Gemini is overloaded" | Google's servers are busy (common with brand-new models). Wait a minute and retry, or pick an older Flash model from the sidebar. |
 | "Rate limit / quota reached" | Free-tier limits hit. Wait a minute or switch to a lighter model such as a `-flash-lite` one. |
 | `ModuleNotFoundError` on Streamlit Cloud | Make sure `requirements.txt` is in the repo root and committed. |
 
